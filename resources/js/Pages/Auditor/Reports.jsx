@@ -27,6 +27,23 @@ const donationStatusDot = (status = "") => {
   return "bg-emerald-500";
 };
 
+const exportCSV = (rows = [], headers = [], filename = "report.csv") => {
+  if (!rows.length || typeof window === "undefined") return;
+  const csv = [
+    headers.join(","),
+    ...rows.map((row) => headers.map((header) => JSON.stringify(row[header] ?? "")).join(",")),
+  ].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.setAttribute("download", filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+};
+
 export default function Reports() {
   const { payments, donations, expenses, totals, fundsHistories = [], studentBalances = [], auditLogs = [], financial = {} } = usePage().props;
 
@@ -118,6 +135,39 @@ export default function Reports() {
       }
     }
   };
+
+  const filteredFunds = useMemo(
+    () =>
+      fundList.filter((entry) =>
+        matchesFilters(entry?.fund_timestamp || entry?.date || entry?.fund_date)
+      ),
+    [fundList, matchesFilters]
+  );
+
+  const filteredAuditLogs = useMemo(
+    () => auditList.filter((entry) => matchesFilters(entry?.date)),
+    [auditList, matchesFilters]
+  );
+
+  const studentPaymentsMap = useMemo(() => {
+    const reference = new Map();
+    sortedPayments.forEach((payment) => {
+      const studentName = payment?.student?.name;
+      if (!studentName) return;
+      if (!reference.has(studentName)) {
+        reference.set(studentName, []);
+      }
+      reference.get(studentName).push(payment);
+    });
+    return reference;
+  }, [sortedPayments]);
+
+  const filteredStudents = useMemo(() => {
+    return studentList.filter((student) => {
+      const paymentsForStudent = studentPaymentsMap.get(student.student_name) || [];
+      return paymentsForStudent.some((payment) => matchesFilters(payment?.date));
+    });
+  }, [studentList, studentPaymentsMap, matchesFilters]);
 
   const basePayments = useMemo(
     () => sortedPayments.filter((p) => matchesFilters(p.date)),
@@ -240,8 +290,9 @@ export default function Reports() {
 
   const searchedFunds = useMemo(() => {
     const term = fundSearch.trim().toLowerCase();
-    if (!term) return fundList;
-    return fundList.filter((h) => [
+    const base = filteredFunds;
+    if (!term) return base;
+    return base.filter((h) => [
       h.type,
       h.donation_type,
       h.details,
@@ -250,26 +301,28 @@ export default function Reports() {
       h.fund_after,
       h.date || h.fund_date,
     ].join(" ").toLowerCase().includes(term));
-  }, [fundList, fundSearch]);
+  }, [filteredFunds, fundSearch]);
 
   const searchedAudit = useMemo(() => {
     const term = auditSearch.trim().toLowerCase();
-    if (!term) return auditList;
-    return auditList.filter((a) => [a.type, a.details, a.amount, a.date].join(" ").toLowerCase().includes(term));
-  }, [auditList, auditSearch]);
+    const base = filteredAuditLogs;
+    if (!term) return base;
+    return base.filter((a) => [a.type, a.details, a.amount, a.date].join(" ").toLowerCase().includes(term));
+  }, [filteredAuditLogs, auditSearch]);
 
   const searchedStudents = useMemo(() => {
     const term = studentSearch.trim().toLowerCase();
-    if (!term) return studentList;
-    return studentList.filter((s) => [s.student_name, s.total_payments, s.balance].join(" ").toLowerCase().includes(term));
-  }, [studentList, studentSearch]);
+    const base = filteredStudents;
+    if (!term) return base;
+    return base.filter((s) => [s.student_name, s.total_payments, s.balance].join(" ").toLowerCase().includes(term));
+  }, [filteredStudents, studentSearch]);
 
   const fundTotals = useMemo(() => {
     let paymentsSum = 0;
     let donationsSum = 0;
     let expensesSum = 0;
     let inKindCount = 0;
-    fundList.forEach((entry) => {
+    filteredFunds.forEach((entry) => {
       const type = (entry?.type || '').toLowerCase();
       const donationType = (entry?.donation_type || '').toLowerCase();
       const amount = Number(entry?.amount || 0);
@@ -292,7 +345,7 @@ export default function Reports() {
       inKind: inKindCount,
       available: paymentsSum + donationsSum - expensesSum,
     };
-  }, [fundList]);
+  }, [filteredFunds]);
 
   const fundsSearchTotals = useMemo(() => {
     let paymentsSum = 0;
@@ -393,6 +446,150 @@ export default function Reports() {
     setStudentPage(1);
   };
 
+  const handleExportPayments = () => {
+    if (!searchedPayments.length) return;
+    const rows = searchedPayments.map((payment) => {
+      const paymentDate = payment.payment_timestamp || payment.date || payment.payment_date || payment.timestamp;
+      return {
+        Date: formatDateTime(paymentDate),
+        Student: payment.student?.name || "-",
+        Contribution:
+          typeof payment.contribution === "object"
+            ? payment.contribution?.contribution_type || "-"
+            : payment.contribution || "-",
+        Amount: Number(payment.amount ?? 0) || 0,
+      };
+    });
+    exportCSV(rows, ["Date", "Student", "Contribution", "Amount"], "auditor-payments.csv");
+  };
+
+  const handleExportDonations = () => {
+    if (!searchedDonations.length) return;
+    if (donationTypeTab === "in-kind") {
+      const rows = searchedDonations.map((donation) => {
+        const totalQty = Number(donation.donation_quantity ?? 0) || 0;
+        const usedQty = Number(donation.used_quantity ?? 0) || 0;
+        const damagedQty = Number(donation.damaged_quantity ?? 0) || 0;
+        const unusableQty = Number(donation.unusable_quantity ?? 0) || 0;
+        const usableQty = Number(donation.usable_quantity ?? totalQty - usedQty - damagedQty - unusableQty);
+        const remaining = Number.isNaN(usableQty) ? Math.max(totalQty - usedQty - damagedQty - unusableQty, 0) : usableQty;
+        return {
+          Date: formatDateTime(donation.donation_timestamp || donation.donation_date || donation.date),
+          Donor: donation.donated_by || "-",
+          ItemType: donation.item_type || "-",
+          Details: donation.donation_description || "-",
+          QtyUsed: Number.isNaN(usedQty) ? 0 : usedQty,
+          QtyRemaining: Number.isNaN(remaining) ? 0 : remaining,
+          Status: donation.usage_status || "Available",
+          StatusNotes: donation.usage_notes || "-",
+          ReceivedBy: donation.received_by || "-",
+        };
+      });
+      exportCSV(
+        rows,
+        ["Date", "Donor", "ItemType", "Details", "QtyUsed", "QtyRemaining", "Status", "StatusNotes", "ReceivedBy"],
+        "auditor-donations-in-kind.csv"
+      );
+      return;
+    }
+
+    const rows = searchedDonations.map((donation) => ({
+      Date: formatDateTime(donation.donation_timestamp || donation.donation_date || donation.date),
+      Donor: donation.donated_by || "-",
+      Amount: Number(donation.donation_amount ?? donation.amount ?? 0) || 0,
+      Details: donation.donation_description || "-",
+      ReceivedBy: donation.received_by || "-",
+    }));
+    exportCSV(rows, ["Date", "Donor", "Amount", "Details", "ReceivedBy"], "auditor-donations-cash.csv");
+  };
+
+  const handleExportExpenses = () => {
+    if (!searchedExpenses.length) return;
+    if (expensesScope === "in-kind") {
+      const rows = searchedExpenses.map((expense) => {
+        const rawDescription = expense.description || "-";
+        const qtyMatch = rawDescription.match(/\(Qty\s*Used:\s*([0-9]+(?:\.[0-9]+)?)\)/i);
+        const cleanedDescription = rawDescription
+          .replace(/\(Qty\s*Used:[^)]*\)/i, "")
+          .replace(/\(Estimated:[^)]*\)/i, "")
+          .trim() || "-";
+        return {
+          DonationType: expense.donation?.donation_type || "In-Kind",
+          ItemType: expense.donation?.item_type || "-",
+          ExpenseCategory: expense.expense_type || "-",
+          DateTime: formatDateTime(expense.expense_timestamp || expense.date || expense.expense_date),
+          QuantityUsed: qtyMatch ? Number(qtyMatch[1]) || 0 : 0,
+          Description: cleanedDescription,
+        };
+      });
+      exportCSV(
+        rows,
+        ["DonationType", "ItemType", "ExpenseCategory", "DateTime", "QuantityUsed", "Description"],
+        "auditor-expenses-in-kind.csv"
+      );
+      return;
+    }
+
+    const rows = searchedExpenses.map((expense) => {
+      const isInKind = (expense?.donation?.donation_type || "").toLowerCase() === "in-kind";
+      const source = expense.contribution?.contribution_type
+        ? expense.contribution.contribution_type
+        : isInKind
+          ? "In-Kind"
+          : "Cash Donations";
+      return {
+        ExpenseCategory: expense.expense_type || "-",
+        Amount: Number(expense.amount ?? 0) || 0,
+        DateTime: formatDateTime(expense.expense_timestamp || expense.date || expense.expense_date),
+        Source: source,
+        Description: expense.description || expense.donation?.donation_description || "-",
+      };
+    });
+    exportCSV(
+      rows,
+      ["ExpenseCategory", "Amount", "DateTime", "Source", "Description"],
+      "auditor-expenses.csv"
+    );
+  };
+
+  const handleExportFunds = () => {
+    if (!searchedFunds.length) return;
+    const rows = searchedFunds.map((history) => ({
+      DateTime: formatDateTime(history.fund_timestamp || history.date || history.fund_date),
+      EntryType: history.type,
+      Amount: Number(history.amount ?? 0) || 0,
+      BalanceBefore: Number(history.fund_before ?? 0) || 0,
+      BalanceAfter: Number(history.fund_after ?? 0) || 0,
+      Details: history.details || "-",
+    }));
+    exportCSV(
+      rows,
+      ["DateTime", "EntryType", "Amount", "BalanceBefore", "BalanceAfter", "Details"],
+      "auditor-funds-history.csv"
+    );
+  };
+
+  const handleExportAudit = () => {
+    if (!searchedAudit.length) return;
+    const rows = searchedAudit.map((entry) => ({
+      DateTime: formatDateTime(entry.date),
+      Type: entry.type,
+      Details: entry.details,
+      Amount: Number(entry.amount ?? 0) || 0,
+    }));
+    exportCSV(rows, ["DateTime", "Type", "Details", "Amount"], "auditor-audit-log.csv");
+  };
+
+  const handleExportStudents = () => {
+    if (!searchedStudents.length) return;
+    const rows = searchedStudents.map((student) => ({
+      Student: student.student_name,
+      TotalPayments: Number(student.total_payments ?? 0) || 0,
+      Balance: Number(student.balance ?? 0) || 0,
+    }));
+    exportCSV(rows, ["Student", "TotalPayments", "Balance"], "auditor-students.csv");
+  };
+
   const getDonationBadge = (donation) => (
     <span
       className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${
@@ -417,6 +614,7 @@ export default function Reports() {
             </div>
           </div>
         </div>
+      
 
         {/* Tabs */}
         <div className="flex flex-wrap gap-3 mb-6">
@@ -493,6 +691,7 @@ export default function Reports() {
         </div>
 
         {/* Filters */}
+        {activeTab !== "overview" && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-6">
           <div className="flex flex-col lg:flex-row lg:items-end gap-4">
             <div>
@@ -604,6 +803,7 @@ export default function Reports() {
             </div>
           </div>
         </div>
+        )}
 
         {/* Overview cards */}
         {activeTab === "overview" && (
@@ -653,16 +853,26 @@ export default function Reports() {
                     </button>
                   )}
                 </div>
-                <input
-                  type="text"
-                  value={paymentSearch}
-                  onChange={(e) => {
-                    setPaymentSearch(e.target.value);
-                    setPaymentPage(1);
-                  }}
-                  placeholder="Search payments..."
-                  className="w-full md:w-64 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-                />
+                <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+                  <input
+                    type="text"
+                    value={paymentSearch}
+                    onChange={(e) => {
+                      setPaymentSearch(e.target.value);
+                      setPaymentPage(1);
+                    }}
+                    placeholder="Search payments..."
+                    className="w-full md:w-64 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleExportPayments}
+                    disabled={!searchedPayments.length}
+                    className="px-4 py-2 text-sm rounded-lg border border-blue-200 text-blue-600 bg-blue-50 hover:bg-blue-100 transition disabled:opacity-40"
+                  >
+                    Export CSV
+                  </button>
+                </div>
               </div>
             </div>
             <table className="w-full text-sm text-gray-700 border-collapse">
@@ -775,21 +985,35 @@ export default function Reports() {
                     </button>
                   ))}
                 </div>
-                <div className="relative w-full md:w-72">
-                  <Search
-                    size={16}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                  />
-                  <input
-                    type="text"
-                    value={donationSearch}
-                    onChange={(e) => {
-                      setDonationSearch(e.target.value);
-                      setDonationPage(1);
-                    }}
-                    placeholder="Search donor, type, amount..."
-                    className="w-full rounded-full border border-slate-200 bg-white py-2 pl-9 pr-4 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
-                  />
+                <div className="flex flex-col md:flex-row gap-2 w-full md:w-auto">
+                  <div className="relative w-full md:w-72">
+                    <Search
+                      size={16}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                    />
+                    <input
+                      type="text"
+                      value={donationSearch}
+                      onChange={(e) => {
+                        setDonationSearch(e.target.value);
+                        setDonationPage(1);
+                      }}
+                      placeholder="Search donor, type, amount..."
+                      className="w-full rounded-full border border-slate-200 bg-white py-2 pl-9 pr-4 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleExportDonations}
+                    disabled={!searchedDonations.length}
+                    className={`px-4 py-2 text-sm rounded-full border ${
+                      donationTypeTab === "in-kind"
+                        ? "border-emerald-200 text-emerald-600 bg-emerald-50"
+                        : "border-purple-200 text-purple-600 bg-purple-50"
+                    } hover:bg-white transition disabled:opacity-40`}
+                  >
+                    Export CSV
+                  </button>
                 </div>
               </div>
             </div>
@@ -953,21 +1177,31 @@ export default function Reports() {
                     </button>
                   ))}
                 </div>
-                <div className="relative w-full md:w-72">
-                  <Search
-                    size={16}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                  />
-                  <input
-                    type="text"
-                    value={expenseSearch}
-                    onChange={(e) => {
-                      setExpenseSearch(e.target.value);
-                      setExpensePage(1);
-                    }}
-                    placeholder="Search category, source, or description..."
-                    className="w-full rounded-full border border-slate-200 bg-white py-2 pl-9 pr-4 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-                  />
+                <div className="flex flex-col md:flex-row gap-2 w-full md:w-auto">
+                  <div className="relative w-full md:w-72">
+                    <Search
+                      size={16}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                    />
+                    <input
+                      type="text"
+                      value={expenseSearch}
+                      onChange={(e) => {
+                        setExpenseSearch(e.target.value);
+                        setExpensePage(1);
+                      }}
+                      placeholder="Search category, source, or description..."
+                      className="w-full rounded-full border border-slate-200 bg-white py-2 pl-9 pr-4 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleExportExpenses}
+                    disabled={!searchedExpenses.length}
+                    className="px-4 py-2 text-sm rounded-full border border-red-200 text-red-600 bg-red-50 hover:bg-red-100 transition disabled:opacity-40"
+                  >
+                    Export CSV
+                  </button>
                 </div>
               </div>
             </div>
@@ -1110,13 +1344,23 @@ export default function Reports() {
             </div>
             <div className="px-5 py-3 border-t flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div className="font-medium text-gray-700">Transaction History</div>
-              <input
-                type="text"
-                value={fundSearch}
-                onChange={(e) => { setFundSearch(e.target.value); setFundPage(1); }}
-                placeholder="Search by date, description, or amount..."
-                className="w-full md:w-64 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
-              />
+              <div className="flex flex-col md:flex-row gap-2 w-full md:w-auto">
+                <input
+                  type="text"
+                  value={fundSearch}
+                  onChange={(e) => { setFundSearch(e.target.value); setFundPage(1); }}
+                  placeholder="Search by date, description, or amount..."
+                  className="w-full md:w-64 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                />
+                <button
+                  type="button"
+                  onClick={handleExportFunds}
+                  disabled={!searchedFunds.length}
+                  className="px-4 py-2 text-sm rounded-lg border border-emerald-200 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 transition disabled:opacity-40"
+                >
+                  Export CSV
+                </button>
+              </div>
             </div>
             <table className="w-full text-sm text-gray-700 border-collapse">
               <thead className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide sticky top-0 z-10">
@@ -1184,13 +1428,23 @@ export default function Reports() {
           <div className="overflow-x-auto bg-white rounded-2xl shadow-md border border-gray-100">
             <div className="px-5 py-3 border-b flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <h2 className="text-lg font-semibold text-gray-700">Audit Log</h2>
-              <input
-                type="text"
-                value={auditSearch}
-                onChange={(e) => { setAuditSearch(e.target.value); setAuditPage(1); }}
-                placeholder="Search audit..."
-                className="w-full md:w-64 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
-              />
+              <div className="flex flex-col md:flex-row w-full md:w-auto gap-2">
+                <input
+                  type="text"
+                  value={auditSearch}
+                  onChange={(e) => { setAuditSearch(e.target.value); setAuditPage(1); }}
+                  placeholder="Search audit..."
+                  className="w-full md:w-64 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
+                />
+                <button
+                  type="button"
+                  onClick={handleExportAudit}
+                  disabled={!searchedAudit.length}
+                  className="px-4 py-2 text-sm rounded-lg border border-gray-300 text-gray-700 bg-gray-100 hover:bg-gray-200 transition disabled:opacity-40"
+                >
+                  Export CSV
+                </button>
+              </div>
             </div>
             <table className="w-full text-sm text-gray-700 border-collapse">
               <thead className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide sticky top-0 z-10">
@@ -1236,13 +1490,23 @@ export default function Reports() {
           <div className="overflow-x-auto bg-white rounded-2xl shadow-md border border-gray-100">
             <div className="px-5 py-3 border-b flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <h2 className="text-lg font-semibold text-indigo-700">Student Balances</h2>
-              <input
-                type="text"
-                value={studentSearch}
-                onChange={(e) => { setStudentSearch(e.target.value); setStudentPage(1); }}
-                placeholder="Search students..."
-                className="w-full md:w-64 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              />
+              <div className="flex flex-col md:flex-row gap-2 w-full md:w-auto">
+                <input
+                  type="text"
+                  value={studentSearch}
+                  onChange={(e) => { setStudentSearch(e.target.value); setStudentPage(1); }}
+                  placeholder="Search students..."
+                  className="w-full md:w-64 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+                <button
+                  type="button"
+                  onClick={handleExportStudents}
+                  disabled={!searchedStudents.length}
+                  className="px-4 py-2 text-sm rounded-lg border border-indigo-200 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition disabled:opacity-40"
+                >
+                  Export CSV
+                </button>
+              </div>
             </div>
             <table className="w-full text-sm text-gray-700 border-collapse">
               <thead className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide sticky top-0 z-10">

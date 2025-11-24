@@ -712,31 +712,39 @@ public function contributions()
         'students' => $students,
         'payments' => $payments,
         'schoolYearContributions' => $schoolYearContributions,
-        'schoolYear' => $schoolYear,
-        'schoolYearCards' => $schoolYearCards,
     ]);
 }
 
-public function reports()
+public function reports(Request $request)
 {
-    $currentYear = date('Y');
+    $timezone = config('app.timezone', 'UTC');
 
-    // Payments grouped by month
+    $range = $this->resolveGuardianReportRange($request, $timezone);
+    $rangeStart = $range['start'];
+    $rangeEnd = $range['end'];
+    $resolvedFilters = $range['filters'];
+
+    $analyticsYear = (int) ($resolvedFilters['year'] ?? $rangeStart->format('Y'));
+
     $paymentsByMonth = Payment::selectRaw('MONTH(payment_date) as month, SUM(amount_paid) as total')
-        ->whereYear('payment_date', $currentYear)
+        ->whereYear('payment_date', $analyticsYear)
         ->groupBy('month')
         ->pluck('total', 'month')
         ->toArray();
 
-    // Donations grouped by month
     $donationsByMonth = Donation::selectRaw('MONTH(donation_date) as month, SUM(donation_amount) as total')
         ->where('donation_type', 'cash')
-        ->whereYear('donation_date', $currentYear)
+        ->whereYear('donation_date', $analyticsYear)
         ->groupBy('month')
         ->pluck('total', 'month')
         ->toArray();
 
-    // Initialize arrays for all 12 months
+    $expensesByMonth = Expense::selectRaw('MONTH(expense_date) as month, SUM(amount) as total')
+        ->whereYear('expense_date', $analyticsYear)
+        ->groupBy('month')
+        ->pluck('total', 'month')
+        ->toArray();
+
     $monthlyCollected = [];
     $monthlyExpenses = [];
     $monthlyAvailable = [];
@@ -744,26 +752,20 @@ public function reports()
     for ($m = 1; $m <= 12; $m++) {
         $payments = $paymentsByMonth[$m] ?? 0;
         $donations = $donationsByMonth[$m] ?? 0;
-        $monthlyCollected[$m-1] = $payments + $donations;
-
-        // Expenses grouped by month
-        $monthlyExpenses[$m-1] = Expense::whereYear('expense_date', $currentYear)
-            ->whereMonth('expense_date', $m)
-            ->sum('amount');
-
-        $monthlyAvailable[$m-1] = $monthlyCollected[$m-1] - $monthlyExpenses[$m-1];
+        $monthlyCollected[$m - 1] = $payments + $donations;
+        $monthlyExpenses[$m - 1] = $expensesByMonth[$m] ?? 0;
+        $monthlyAvailable[$m - 1] = $monthlyCollected[$m - 1] - $monthlyExpenses[$m - 1];
     }
 
-    $totalCollected = array_sum($monthlyCollected);
-    $totalExpenses = array_sum($monthlyExpenses);
-    $totalAvailable = $totalCollected - $totalExpenses;
+    $rangeStartDate = $rangeStart->copy()->startOfDay();
+    $rangeEndDate = $rangeEnd->copy()->endOfDay();
 
-    $timezone = config('app.timezone', 'UTC');
-
-    // Detailed data for transparency
     $paymentsCollection = Payment::with(['student', 'contribution'])
+        ->whereBetween('payment_date', [$rangeStartDate->toDateString(), $rangeEndDate->toDateString()])
         ->orderByDesc('payment_date')
         ->get();
+
+    $paymentsTotalInRange = (float) $paymentsCollection->sum('amount_paid');
 
     $payments = $paymentsCollection->map(function ($payment) use ($timezone) {
         $primarySource = $payment->created_at ?? $payment->payment_date;
@@ -798,8 +800,15 @@ public function reports()
         'usage_notes',
         'created_at'
     )
+        ->whereBetween('donation_date', [$rangeStartDate->toDateString(), $rangeEndDate->toDateString()])
         ->orderByDesc('donation_date')
         ->get();
+
+    $cashDonationsTotalInRange = (float) $donationsCollection
+        ->filter(function ($donation) {
+            return strcasecmp($donation->donation_type ?? '', 'in-kind') !== 0;
+        })
+        ->sum('donation_amount');
 
     $usageByDonation = $donationsCollection->isNotEmpty()
         ? Expense::whereIn('donation_id', $donationsCollection->pluck('id'))
@@ -844,12 +853,16 @@ public function reports()
         ];
     })->values();
 
+    $expenseTotalInRange = (float) Expense::whereBetween('expense_date', [$rangeStartDate->toDateString(), $rangeEndDate->toDateString()])
+        ->sum('amount');
+
     $fundsHistoriesCollection = FundHistory::with(['donation', 'expense', 'payment.student'])
         ->where(function ($query) {
             $query->whereHas('donation')
                 ->orWhereNotNull('payment_id')
                 ->orWhereNotNull('expense_id');
         })
+        ->whereBetween('fund_date', [$rangeStartDate->toDateString(), $rangeEndDate->toDateString()])
         ->orderBy('fund_date')
         ->orderBy('id')
         ->get();
@@ -895,8 +908,15 @@ public function reports()
             ];
         })->values();
     } else {
-        $fundsHistories = collect($this->buildFallbackFundHistories());
+        $hasFundHistoryData = FundHistory::query()->exists();
+        $fundsHistories = $hasFundHistoryData
+            ? collect()
+            : collect($this->buildFallbackFundHistories());
     }
+
+    $totalCollected = $paymentsTotalInRange + $cashDonationsTotalInRange;
+    $totalExpenses = $expenseTotalInRange;
+    $totalAvailable = $totalCollected - $totalExpenses;
 
     return $this->renderWithNotifications('Guardian/Report', [
         'reports' => [
@@ -910,20 +930,89 @@ public function reports()
         'payments' => $payments,
         'donations' => $donations,
         'fundsHistories' => $fundsHistories,
+        'reportFilters' => $resolvedFilters,
     ]);
 }
 
-private function extractUsedQuantity(?string $description): float
+private function resolveGuardianReportRange(Request $request, string $timezone): array
 {
-    if (!$description) {
-        return 0;
+    $now = Carbon::now($timezone);
+    $rawType = strtolower(str_replace(['-', ' '], '_', $request->input('filter_type', 'month')));
+    $type = in_array($rawType, ['month', 'year', 'date_range'], true) ? $rawType : 'month';
+
+    $start = $now->copy()->startOfMonth();
+    $end = $now->copy()->endOfMonth();
+    $resolvedType = 'month';
+    $resolvedMonth = $start->format('Y-m');
+    $resolvedYear = $start->format('Y');
+
+    if ($type === 'year') {
+        $year = (int) ($request->input('filter_year') ?: $now->year);
+        if ($year < 2000 || $year > 2100) {
+            $year = (int) $now->year;
+        }
+
+        $start = Carbon::create($year, 1, 1, 0, 0, 0, $timezone)->startOfYear();
+        $end = $start->copy()->endOfYear();
+        $resolvedType = 'year';
+        $resolvedYear = (string) $year;
+        $resolvedMonth = sprintf('%04d-01', $year);
+    } elseif ($type === 'date_range') {
+        $startInput = $request->input('filter_start');
+        $endInput = $request->input('filter_end');
+
+        if ($startInput || $endInput) {
+            try {
+                $start = $startInput
+                    ? Carbon::parse($startInput, $timezone)->startOfDay()
+                    : Carbon::parse($endInput, $timezone)->copy()->startOfDay();
+            } catch (\Exception $e) {
+                $start = $now->copy()->startOfMonth();
+            }
+
+            try {
+                $end = $endInput
+                    ? Carbon::parse($endInput, $timezone)->endOfDay()
+                    : $start->copy()->endOfDay();
+            } catch (\Exception $e) {
+                $end = $start->copy()->endOfMonth();
+            }
+
+            if ($start->greaterThan($end)) {
+                [$start, $end] = [$end->copy()->startOfDay(), $start->copy()->endOfDay()];
+            }
+
+            $resolvedType = 'dateRange';
+            $resolvedMonth = $start->format('Y-m');
+            $resolvedYear = $start->format('Y');
+        }
+    } else {
+        $monthInput = $request->input('filter_month');
+        if ($monthInput && preg_match('/^\d{4}-\d{2}$/', $monthInput)) {
+            [$year, $month] = array_map('intval', explode('-', $monthInput));
+            $reference = Carbon::create($year, max(1, min(12, $month)), 1, 0, 0, 0, $timezone);
+        } else {
+            $reference = $now->copy();
+        }
+
+        $start = $reference->copy()->startOfMonth();
+        $end = $reference->copy()->endOfMonth();
+        $resolvedType = 'month';
+        $resolvedMonth = $start->format('Y-m');
+        $resolvedYear = $start->format('Y');
     }
 
-    if (preg_match('/Qty\s*Used\s*:\s*([0-9]+(?:\.[0-9]+)?)/i', $description, $matches)) {
-        return (float) $matches[1];
-    }
-
-    return 0;
+    return [
+        'start' => $start->copy()->startOfDay(),
+        'end' => $end->copy()->endOfDay(),
+        'filters' => [
+            'type' => $resolvedType,
+            'month' => $resolvedMonth,
+            'year' => $resolvedYear,
+            'start' => $start->copy()->startOfDay()->toDateString(),
+            'end' => $end->copy()->endOfDay()->toDateString(),
+        ],
+    ];
 }
 
 private function buildLinkedStudentIdsMap(Guardian $guardian, $students)

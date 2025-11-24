@@ -1478,6 +1478,47 @@ const SectionReport = ({
     return parts.map((part) => part[0]?.toUpperCase() || "").join("");
   };
 
+  const safeAmount = (value) => {
+    const parsed = parseFloat(value ?? 0);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const buildContributionRows = (student) => {
+    const breakdown = Array.isArray(student.contributions) ? student.contributions : [];
+    const paidHistory = Array.isArray(student.paid_contributions) ? student.paid_contributions : [];
+
+    if (!breakdown.length && paidHistory.length) {
+      return paidHistory.map((entry) => ({
+        ...entry,
+        required: safeAmount(entry.required),
+        balance: safeAmount(entry.balance),
+        paid_display: safeAmount(entry.paid_display ?? entry.paid),
+      }));
+    }
+
+    const paidTotals = paidHistory.reduce((acc, entry) => {
+      if (!entry?.id) return acc;
+      const key = String(entry.id);
+      const amount = safeAmount(entry.paid_display ?? entry.paid);
+      acc[key] = (acc[key] || 0) + amount;
+      return acc;
+    }, {});
+
+    return breakdown.map((item) => {
+      const key = item?.id != null ? String(item.id) : null;
+      const override = key && Object.prototype.hasOwnProperty.call(paidTotals, key)
+        ? paidTotals[key]
+        : undefined;
+
+      return {
+        ...item,
+        required: safeAmount(item.required),
+        balance: safeAmount(item.balance),
+        paid_display: override ?? safeAmount(item.paid_display ?? item.paid),
+      };
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap gap-2">
@@ -1674,15 +1715,12 @@ const SectionReport = ({
                       <tbody className="divide-y">
                         {combinedStudents.length > 0 ? (
                           combinedStudents.map((student, idx) => {
-                            const baseContributions = Array.isArray(student.paid_contributions) && student.paid_contributions.length > 0
-                              ? student.paid_contributions
-                              : student.contributions;
-                            const contributions = Array.isArray(baseContributions)
-                              ? baseContributions.filter((c) => {
-                                  const paidDisplay = parseFloat(c.paid_display ?? c.paid ?? 0);
-                                  return paidDisplay > 0;
-                                })
-                              : [];
+                            const contributions = buildContributionRows(student).filter((contribution) => {
+                              const requiredValue = safeAmount(contribution.required);
+                              const paidDisplay = safeAmount(contribution.paid_display ?? contribution.paid);
+                              const balanceValue = safeAmount(contribution.balance);
+                              return requiredValue > 0 || paidDisplay > 0 || balanceValue > 0;
+                            });
                             const carryOver = student.previous_school_year?.carry_over ?? student.previous_balance ?? 0;
                             const currentRequired = student.current_school_year?.required ?? student.required ?? 0;
                             const currentPaid = student.current_school_year?.paid ?? student.paid ?? 0;

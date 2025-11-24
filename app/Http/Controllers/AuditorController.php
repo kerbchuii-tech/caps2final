@@ -116,11 +116,17 @@ class AuditorController extends Controller
     // Active school year
     $schoolYear = SchoolYear::where('is_active', 1)->first();
 
-    // Expenses filtered by school year
-    $expenses = Expense::with(['contribution.schoolYearContributions.schoolYear'])
+    // Expenses filtered by school year (include donation-linked expenses even without school year)
+    $expenses = Expense::with([
+            'contribution.schoolYearContributions.schoolYear',
+            'donation',
+        ])
         ->when($schoolYear, function ($query) use ($schoolYear) {
-            $query->whereHas('contribution.schoolYearContributions', function ($q) use ($schoolYear) {
-                $q->where('school_year_id', $schoolYear->id);
+            $query->where(function ($q) use ($schoolYear) {
+                $q->whereHas('contribution.schoolYearContributions', function ($q2) use ($schoolYear) {
+                    $q2->where('school_year_id', $schoolYear->id);
+                })
+                ->orWhereNotNull('donation_id');
             });
         })
         ->get();

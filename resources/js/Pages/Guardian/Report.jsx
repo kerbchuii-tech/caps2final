@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { usePage } from "@inertiajs/react";
+import { usePage, router } from "@inertiajs/react";
 import GuardianLayout from "@/Layouts/GuardianLayout";
 import {
   Chart as ChartJS,
@@ -10,7 +10,7 @@ import {
   Legend,
 } from "chart.js";
 import { Bar } from "react-chartjs-2";
-import { DollarSign, Folder, Gift, TrendingDown, TrendingUp } from "lucide-react";
+import { DollarSign, Folder, Gift, TrendingDown, TrendingUp, Download } from "lucide-react";
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
 
@@ -34,6 +34,32 @@ const PAGE_SIZE = 10;
 const paginate = (items, page) => {
   const startIndex = (page - 1) * PAGE_SIZE;
   return items.slice(startIndex, startIndex + PAGE_SIZE);
+};
+
+const downloadCSV = (filename, headers, rows) => {
+  const escape = (value) => {
+    const normalized = value ?? "";
+    const stringValue = typeof normalized === "number" ? normalized.toString() : String(normalized);
+    if (/[",\n]/.test(stringValue)) {
+      return `"${stringValue.replace(/"/g, '""')}"`;
+    }
+    return stringValue;
+  };
+
+  const csvLines = [headers]
+    .concat(rows)
+    .map((row) => row.map(escape).join(","))
+    .join("\r\n");
+
+  const blob = new Blob([csvLines], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.setAttribute("download", filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 };
 
 const PaginationControls = ({
@@ -153,11 +179,20 @@ export default function Report() {
     payments: paymentsProp = [],
     donations: donationsProp = [],
     fundsHistories: fundsHistoriesProp = [],
+    reportFilters: reportFiltersProp = {},
   } = usePage().props;
 
   const payments = Array.isArray(paymentsProp) ? paymentsProp : [];
   const donations = Array.isArray(donationsProp) ? donationsProp : [];
   const fundsHistories = Array.isArray(fundsHistoriesProp) ? fundsHistoriesProp : [];
+  const reportFilters = typeof reportFiltersProp === "object" && reportFiltersProp !== null ? reportFiltersProp : {};
+
+  const fallbackMonth = useMemo(() => {
+    const today = new Date();
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+  }, []);
+
+  const fallbackYear = useMemo(() => String(new Date().getFullYear()), []);
 
   const [activeTab, setActiveTab] = useState("summary");
   const [paymentPage, setPaymentPage] = useState(1);
@@ -165,6 +200,22 @@ export default function Report() {
   const [fundHistoryPage, setFundHistoryPage] = useState(1);
   const [donationTypeTab, setDonationTypeTab] = useState("cash");
   const [donationSearch, setDonationSearch] = useState("");
+  const [paymentSearch, setPaymentSearch] = useState("");
+  const [fundHistorySearch, setFundHistorySearch] = useState("");
+  const [filterType, setFilterType] = useState(reportFilters.type ?? "month");
+  const [filterMonth, setFilterMonth] = useState(reportFilters.month ?? fallbackMonth);
+  const [filterYear, setFilterYear] = useState(reportFilters.year ?? fallbackYear);
+  const [filterStart, setFilterStart] = useState(reportFilters.start ?? "");
+  const [filterEnd, setFilterEnd] = useState(reportFilters.end ?? "");
+  const [isApplyingFilters, setIsApplyingFilters] = useState(false);
+
+  useEffect(() => {
+    setFilterType(reportFilters.type ?? "month");
+    setFilterMonth(reportFilters.month ?? fallbackMonth);
+    setFilterYear(reportFilters.year ?? fallbackYear);
+    setFilterStart(reportFilters.start ?? "");
+    setFilterEnd(reportFilters.end ?? "");
+  }, [reportFilters.type, reportFilters.month, reportFilters.year, reportFilters.start, reportFilters.end, fallbackMonth, fallbackYear]);
 
   useEffect(() => {
     if (activeTab === "payments") {
@@ -179,6 +230,97 @@ export default function Report() {
   useEffect(() => {
     setDonationPage(1);
   }, [donationTypeTab, donationSearch]);
+
+  useEffect(() => {
+    setPaymentPage(1);
+  }, [paymentSearch]);
+
+  useEffect(() => {
+    setFundHistoryPage(1);
+  }, [fundHistorySearch]);
+
+  const filterDescriptor = useMemo(() => {
+    if (filterType === "year") {
+      return `Showing data for ${filterYear || fallbackYear}`;
+    }
+    if (filterType === "dateRange") {
+      if (!filterStart && !filterEnd) {
+        return "Showing custom date range";
+      }
+      return `Showing ${filterStart || "(start)"} – ${filterEnd || "(end)"}`;
+    }
+    return filterMonth ? `Showing ${filterMonth}` : `Showing ${fallbackMonth}`;
+  }, [filterType, filterYear, filterStart, filterEnd, filterMonth, fallbackMonth, fallbackYear]);
+
+  const submitFilters = (overrides = {}) => {
+    const nextType = overrides.filterType ?? filterType;
+    const nextMonth = overrides.filterMonth ?? filterMonth ?? fallbackMonth;
+    const nextYear = overrides.filterYear ?? filterYear ?? fallbackYear;
+    const nextStart = overrides.filterStart ?? filterStart ?? "";
+    const nextEnd = overrides.filterEnd ?? filterEnd ?? "";
+
+    const params = { filter_type: nextType };
+    if (nextType === "year") {
+      params.filter_year = nextYear || fallbackYear;
+    } else if (nextType === "dateRange") {
+      if (nextStart) params.filter_start = nextStart;
+      if (nextEnd) params.filter_end = nextEnd;
+    } else {
+      const safeMonth = nextMonth && /^\d{4}-\d{2}$/.test(nextMonth) ? nextMonth : fallbackMonth;
+      params.filter_month = safeMonth;
+    }
+
+    setIsApplyingFilters(true);
+    router.get("/guardian/reports", params, {
+      preserveScroll: true,
+      preserveState: true,
+      replace: true,
+      onFinish: () => setIsApplyingFilters(false),
+    });
+  };
+
+  const handleClearFilters = () => {
+    const today = new Date();
+    const resetMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+    const resetYear = String(today.getFullYear());
+    setFilterType("month");
+    setFilterMonth(resetMonth);
+    setFilterYear(resetYear);
+    setFilterStart("");
+    setFilterEnd("");
+    submitFilters({
+      filterType: "month",
+      filterMonth: resetMonth,
+      filterYear: resetYear,
+      filterStart: "",
+      filterEnd: "",
+    });
+  };
+
+  const handleFilterTypeChange = (value) => {
+    setFilterType(value);
+    submitFilters({ filterType: value });
+  };
+
+  const handleMonthChange = (value) => {
+    setFilterMonth(value);
+    submitFilters({ filterType: "month", filterMonth: value });
+  };
+
+  const handleYearChange = (value) => {
+    setFilterYear(value);
+    submitFilters({ filterType: "year", filterYear: value });
+  };
+
+  const handleStartChange = (value) => {
+    setFilterStart(value);
+    submitFilters({ filterType: "dateRange", filterStart: value });
+  };
+
+  const handleEndChange = (value) => {
+    setFilterEnd(value);
+    submitFilters({ filterType: "dateRange", filterEnd: value });
+  };
 
   if (!reports) {
     return (
@@ -220,10 +362,24 @@ export default function Report() {
     };
   }, [payments, donations, fundsHistories]);
 
-  const paymentsTotalPages = Math.max(1, Math.ceil(payments.length / PAGE_SIZE));
+  const filteredPayments = useMemo(() => {
+    const term = paymentSearch.trim().toLowerCase();
+    if (!term) return payments;
+    return payments.filter((payment) => {
+      const fields = [
+        payment.student_name,
+        payment.contribution_name,
+        payment.amount_paid,
+        payment.payment_date,
+      ];
+      return fields.some((field) => String(field ?? "").toLowerCase().includes(term));
+    });
+  }, [payments, paymentSearch]);
+
+  const paymentsTotalPages = Math.max(1, Math.ceil(filteredPayments.length / PAGE_SIZE));
   const paginatedPayments = useMemo(
-    () => paginate(payments, paymentPage),
-    [payments, paymentPage]
+    () => paginate(filteredPayments, paymentPage),
+    [filteredPayments, paymentPage]
   );
 
   const filteredDonations = useMemo(() => {
@@ -262,6 +418,54 @@ export default function Report() {
     () => paginate(filteredDonations, donationPage),
     [filteredDonations, donationPage]
   );
+
+  const handleExportDonations = () => {
+    if (!filteredDonations.length) return;
+    if (donationTypeTab === "in-kind") {
+      const headers = [
+        "Date",
+        "Donated By",
+        "Item Type",
+        "Description",
+        "Quantity Donated",
+        "Used",
+        "Remaining",
+        "Status",
+        "Received By",
+      ];
+      const rows = filteredDonations.map((donation) => {
+        const usedQty = Number(donation.used_quantity ?? 0);
+        const totalQty = Number(donation.donation_quantity ?? 0);
+        const damagedQty = Number(donation.damaged_quantity ?? 0);
+        const unusableQty = Number(donation.unusable_quantity ?? 0);
+        const usableQty = Number(donation.usable_quantity ?? Math.max(totalQty - usedQty - damagedQty - unusableQty, 0));
+        const remaining = usableQty || Math.max(totalQty - usedQty - damagedQty - unusableQty, 0);
+        return [
+          formatDateTime(donation.donation_timestamp || donation.donation_date),
+          donation.donated_by ?? "—",
+          donation.item_type ?? "—",
+          donation.donation_description ?? "—",
+          totalQty,
+          usedQty,
+          remaining,
+          donation.usage_status ?? "Available",
+          donation.received_by ?? "—",
+        ];
+      });
+      downloadCSV("donations-in-kind.csv", headers, rows);
+      return;
+    }
+
+    const headers = ["Date", "Donated By", "Amount", "Description", "Received By"];
+    const rows = filteredDonations.map((donation) => [
+      formatDateTime(donation.donation_timestamp || donation.donation_date),
+      donation.donated_by ?? "—",
+      donation.donation_amount ?? 0,
+      donation.donation_description ?? "—",
+      donation.received_by ?? "—",
+    ]);
+    downloadCSV("donations-cash.csv", headers, rows);
+  };
 
   const fundsBreakdown = useMemo(() => {
     let running = 0;
@@ -327,13 +531,44 @@ export default function Report() {
     return { rows, totals: totalsAcc };
   }, [fundsHistories]);
 
+  const filteredFundRows = useMemo(() => {
+    const term = fundHistorySearch.trim().toLowerCase();
+    if (!term) return fundsBreakdown.rows;
+    return fundsBreakdown.rows.filter((row) => {
+      const fields = [
+        row.fundDate,
+        formatDateTime(row.fundTimestamp || row.fundDate),
+        row.details?.description,
+        row.details?.donor,
+        row.details?.student,
+        row.details?.expenseType,
+        row.nature,
+      ];
+      return fields.some((field) => String(field ?? "").toLowerCase().includes(term));
+    });
+  }, [fundsBreakdown.rows, fundHistorySearch]);
+
+  const filteredFundTotals = useMemo(() => {
+    return filteredFundRows.reduce(
+      (acc, row) => {
+        acc.payments += row.payment;
+        acc.donations += row.donation;
+        acc.inKind += row.inKind;
+        acc.expenses += row.expense;
+        acc.endingFund = row.fundAfter;
+        return acc;
+      },
+      { payments: 0, donations: 0, inKind: 0, expenses: 0, endingFund: filteredFundRows.at(-1)?.fundAfter ?? 0 }
+    );
+  }, [filteredFundRows]);
+
   const fundHistoryTotalPages = Math.max(
     1,
-    Math.ceil(fundsBreakdown.rows.length / PAGE_SIZE)
+    Math.ceil(filteredFundRows.length / PAGE_SIZE)
   );
   const paginatedFundHistory = useMemo(
-    () => paginate(fundsBreakdown.rows, fundHistoryPage),
-    [fundsBreakdown.rows, fundHistoryPage]
+    () => paginate(filteredFundRows, fundHistoryPage),
+    [filteredFundRows, fundHistoryPage]
   );
 
   useEffect(() => {
@@ -347,6 +582,41 @@ export default function Report() {
   useEffect(() => {
     setFundHistoryPage((prev) => Math.min(prev, fundHistoryTotalPages));
   }, [fundHistoryTotalPages]);
+
+  const handleExportPayments = () => {
+    if (!filteredPayments.length) return;
+    const headers = ["Student", "Contribution", "Amount", "Date"];
+    const rows = filteredPayments.map((payment) => [
+      payment.student_name ?? "—",
+      payment.contribution_name ?? "N/A",
+      payment.amount_paid ?? 0,
+      formatDateTime(payment.payment_date),
+    ]);
+    downloadCSV("payments.csv", headers, rows);
+  };
+
+  const handleExportFundHistory = () => {
+    if (!filteredFundRows.length) return;
+    const headers = [
+      "Date",
+      "Payment",
+      "Donation",
+      "Expense",
+      "Balance Before",
+      "Balance After",
+      "Details",
+    ];
+    const rows = filteredFundRows.map((row) => [
+      formatDateTime(row.fundTimestamp || row.fundDate),
+      row.payment ?? 0,
+      row.donation ?? 0,
+      row.expense ?? 0,
+      row.fundBefore ?? 0,
+      row.fundAfter ?? 0,
+      row.details?.description || row.nature,
+    ]);
+    downloadCSV("fund-history.csv", headers, rows);
+  };
 
   const expenseBreakdown = useMemo(() => {
     const grouped = new Map();
@@ -551,6 +821,105 @@ export default function Report() {
                 {tab.label}
               </button>
             ))}
+          </div>
+        </div>
+
+        <div className="rounded-[28px] border border-slate-100 bg-white/95 p-6 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div className="flex flex-wrap gap-4">
+              <div className="flex flex-col min-w-[160px]">
+                <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500 font-semibold">
+                  Filter Type
+                </label>
+                <select
+                  value={filterType}
+                  onChange={(e) => handleFilterTypeChange(e.target.value)}
+                  className="mt-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-200"
+                >
+                  <option value="month">By Month</option>
+                  <option value="dateRange">By Date Range</option>
+                  <option value="year">By Year</option>
+                </select>
+              </div>
+
+              {filterType === "month" && (
+                <div className="flex flex-col">
+                  <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500 font-semibold">
+                    Month
+                  </label>
+                  <input
+                    type="month"
+                    value={filterMonth}
+                    onChange={(e) => handleMonthChange(e.target.value)}
+                    className="mt-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-200"
+                  />
+                </div>
+              )}
+
+              {filterType === "year" && (
+                <div className="flex flex-col">
+                  <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500 font-semibold">
+                    Year
+                  </label>
+                  <input
+                    type="number"
+                    min="2000"
+                    max="2100"
+                    value={filterYear}
+                    onChange={(e) => handleYearChange(e.target.value)}
+                    className="mt-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-200"
+                  />
+                </div>
+              )}
+
+              {filterType === "dateRange" && (
+                <div className="flex flex-wrap gap-4">
+                  <div className="flex flex-col">
+                    <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500 font-semibold">
+                      Start Date
+                    </label>
+                    <input
+                      type="date"
+                      value={filterStart}
+                      onChange={(e) => handleStartChange(e.target.value)}
+                      className="mt-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-200"
+                    />
+                  </div>
+                  <div className="flex flex-col">
+                    <label className="text-[11px] uppercase tracking-[0.2em] text-slate-500 font-semibold">
+                      End Date
+                    </label>
+                    <input
+                      type="date"
+                      value={filterEnd}
+                      onChange={(e) => handleEndChange(e.target.value)}
+                      className="mt-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-200"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                {filterDescriptor}
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={handleClearFilters}
+                  disabled={isApplyingFilters}
+                  className="rounded-full border border-slate-200 px-5 py-2 text-sm font-semibold text-slate-600 transition hover:border-rose-300 hover:text-rose-600 disabled:opacity-50"
+                >
+                  Reset
+                </button>
+                {isApplyingFilters && (
+                  <span className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-500">
+                    Updating…
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -868,11 +1237,35 @@ export default function Report() {
 
         {activeTab === "payments" && (
           <div className="rounded-[28px] border border-slate-100 bg-white/95 shadow-sm">
-            <div className="border-b border-slate-100 bg-slate-50 px-6 py-4 rounded-t-[28px]">
-              <h2 className="text-lg font-semibold text-gray-700">Payment Records</h2>
-              <p className="text-xs text-gray-500">
-                Detailed list of all contributions recorded by the treasurer.
-              </p>
+            <div className="border-b border-slate-100 bg-slate-50 px-6 py-4 rounded-t-[28px] flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-700">Payment Records</h2>
+                <p className="text-xs text-gray-500">
+                  Detailed list of all contributions recorded by the treasurer.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="relative w-full md:w-72">
+                  <input
+                    type="text"
+                    value={paymentSearch}
+                    onChange={(e) => setPaymentSearch(e.target.value)}
+                    placeholder="Search student, amount, date..."
+                    className="w-full rounded-full border border-slate-200 bg-white py-2 pl-4 pr-10 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                  <span className="absolute inset-y-0 right-3 flex items-center text-slate-400 text-xs uppercase tracking-[0.3em]">
+                    {filteredPayments.length}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleExportPayments}
+                  disabled={!filteredPayments.length}
+                  className="inline-flex items-center gap-2 rounded-full border border-blue-600 px-4 py-2 text-sm font-semibold text-blue-600 transition hover:bg-blue-50 disabled:opacity-40"
+                >
+                  <Download size={16} /> Export CSV
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm text-gray-700">
@@ -885,7 +1278,7 @@ export default function Report() {
                   </tr>
                 </thead>
                 <tbody>
-                  {payments.length > 0 ? (
+                  {filteredPayments.length > 0 ? (
                     paginatedPayments.map((payment) => (
                       <tr key={payment.id} className="odd:bg-gray-50/60 hover:bg-gray-50">
                         <td className="px-5 py-3">{payment.student_name ?? "—"}</td>
@@ -916,7 +1309,7 @@ export default function Report() {
             <PaginationControls
               currentPage={paymentPage}
               totalPages={paymentsTotalPages}
-              totalItems={payments.length}
+              totalItems={filteredPayments.length}
               label="payments"
               onPageChange={setPaymentPage}
             />
@@ -966,6 +1359,14 @@ export default function Report() {
                     className="w-full rounded-full border border-slate-200 bg-white py-2 pl-4 pr-4 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
                   />
                 </div>
+                <button
+                  type="button"
+                  onClick={handleExportDonations}
+                  disabled={!filteredDonations.length}
+                  className="inline-flex items-center gap-2 rounded-full border border-blue-600 px-4 py-2 text-sm font-semibold text-blue-600 transition hover:bg-blue-50 disabled:opacity-40"
+                >
+                  <Download size={16} /> Export CSV
+                </button>
               </div>
             </div>
             <div className="overflow-x-auto">
@@ -1107,11 +1508,35 @@ export default function Report() {
 
         {activeTab === "fundHistory" && (
           <div className="rounded-[28px] border border-slate-100 bg-white/95 shadow-sm">
-            <div className="border-b border-slate-100 bg-slate-50 px-6 py-4 rounded-t-[28px]">
-              <h2 className="text-lg font-semibold text-gray-700">Fund History</h2>
-              <p className="text-xs text-gray-500">
-                Running fund balance based on payments, donations, and expenses.
-              </p>
+            <div className="border-b border-slate-100 bg-slate-50 px-6 py-4 rounded-t-[28px] flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-700">Fund History</h2>
+                <p className="text-xs text-gray-500">
+                  Running fund balance based on payments, donations, and expenses.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="relative w-full md:w-72">
+                  <input
+                    type="text"
+                    value={fundHistorySearch}
+                    onChange={(e) => setFundHistorySearch(e.target.value)}
+                    placeholder="Search date, detail, donor..."
+                    className="w-full rounded-full border border-slate-200 bg-white py-2 pl-4 pr-10 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                  <span className="absolute inset-y-0 right-3 flex items-center text-slate-400 text-xs uppercase tracking-[0.3em]">
+                    {filteredFundRows.length}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleExportFundHistory}
+                  disabled={!filteredFundRows.length}
+                  className="inline-flex items-center gap-2 rounded-full border border-blue-600 px-4 py-2 text-sm font-semibold text-blue-600 transition hover:bg-blue-50 disabled:opacity-40"
+                >
+                  <Download size={16} /> Export CSV
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm text-gray-700">
@@ -1127,7 +1552,7 @@ export default function Report() {
                   </tr>
                 </thead>
                 <tbody>
-                  {fundsBreakdown.rows.length > 0 ? (
+                  {filteredFundRows.length > 0 ? (
                     <>
                       {paginatedFundHistory.map((row) => (
                         <tr key={row.key} className="odd:bg-gray-50/60 hover:bg-gray-50">
@@ -1202,24 +1627,24 @@ export default function Report() {
                       <tr className="bg-gray-100 font-semibold">
                         <td className="px-5 py-3 text-right">Total</td>
                         <td className="px-5 py-3 text-right text-blue-700">
-                          {formatCurrency(fundsBreakdown.totals.payments)}
+                          {formatCurrency(filteredFundTotals.payments)}
                         </td>
                         <td className="px-5 py-3 text-right text-purple-700">
-                          {formatCurrency(fundsBreakdown.totals.donations)}
-                          {fundsBreakdown.totals.inKind
-                            ? ` + ${formatCurrency(fundsBreakdown.totals.inKind)} (In-Kind)`
+                          {formatCurrency(filteredFundTotals.donations)}
+                          {filteredFundTotals.inKind
+                            ? ` + ${formatCurrency(filteredFundTotals.inKind)} (In-Kind)`
                             : ""}
                         </td>
                         <td className="px-5 py-3 text-right text-red-700">
-                          {formatCurrency(fundsBreakdown.totals.expenses)}
+                          {formatCurrency(filteredFundTotals.expenses)}
                         </td>
                         <td className="px-5 py-3 text-right">
                           {formatCurrency(
-                            fundsBreakdown.totals.payments + fundsBreakdown.totals.donations
+                            filteredFundTotals.payments + filteredFundTotals.donations
                           )}
                         </td>
                         <td className="px-5 py-3 text-right">
-                          {formatCurrency(fundsBreakdown.totals.endingFund)}
+                          {formatCurrency(filteredFundTotals.endingFund)}
                         </td>
                         <td />
                       </tr>
@@ -1240,7 +1665,7 @@ export default function Report() {
             <PaginationControls
               currentPage={fundHistoryPage}
               totalPages={fundHistoryTotalPages}
-              totalItems={fundsBreakdown.rows.length}
+              totalItems={filteredFundRows.length}
               label="fund history records"
               onPageChange={setFundHistoryPage}
             />

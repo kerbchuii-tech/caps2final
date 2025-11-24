@@ -251,8 +251,7 @@ Route::prefix('auditor')->group(function () {
       Route::get('/expenses', [AuditorController::class, 'expenses'])->name('auditor.expenses');
       Route::get('/funds', [AuditorController::class, 'funds'])->name('auditor.funds');
       Route::get('/reports', [AuditorController::class, 'reports'])->name('auditor.reports');
-
-        Route::get('/logout', [AuditorController::class, 'logout'])->name('auditor.logout');
+      Route::post('/logout', [AuditorController::class, 'logout'])->name('auditor.logout');
     });
 });
 
