@@ -17,7 +17,10 @@ import {
   FaMoneyBillWave,
   FaFileInvoiceDollar,
   FaWallet,
-  FaBullhorn
+  FaBullhorn,
+  FaChartLine,
+  FaClock,
+  FaClipboardList
 } from 'react-icons/fa';
 
 const Dashboard = ({
@@ -38,6 +41,8 @@ const Dashboard = ({
   ];
 
   const barColors = ['#FACC15', '#EF4444', '#22C55E'];
+
+  const formatCurrency = (value) => `₱ ${Number(value ?? 0).toLocaleString()}`;
 
   const formatDate = (dateStr) => {
     if (!dateStr) return 'N/A';
@@ -92,79 +97,80 @@ const Dashboard = ({
   return (
     <>
       <Head title="Admin Dashboard" />
-      <div className="space-y-6">
+      <div className="space-y-8">
 
-        {/* Header */}
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-400"></p>
-              <h1 className="text-3xl font-extrabold bg-gradient-to-r from-blue-600 to-green-600 bg-clip-text text-transparent">
-                Dashboard</h1>
+        {/* Hero */}
+        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-blue-700 via-indigo-700 to-emerald-500 p-6 sm:p-8 text-white shadow-xl">
+          <div className="absolute inset-0 opacity-40 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.65),transparent_55%)]" />
+          <div className="relative flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-3">
+              <p className="text-xs uppercase tracking-[0.35em] text-white/80">Welcome back</p>
+              <h1 className="text-3xl sm:text-4xl font-black leading-tight">
+                {userRole === 'super_admin' ? 'Super Admin' : 'Admin'} Overview
+              </h1>
+              <p className="max-w-xl text-sm sm:text-base text-white/80">
+                Monitor contribution flows, approve requests faster, and keep parents informed with a refreshed analytics workspace.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-4">
+              <HeroBadge icon={<FaChartLine />} label="Funds Collected" value={formatCurrency(totalFundsCollected)} tone="emerald" />
+              <HeroBadge icon={<FaFileInvoiceDollar />} label="Total Expenses" value={formatCurrency(totalExpenses)} tone="rose" />
+              <HeroBadge icon={<FaWallet />} label="Available" value={formatCurrency(availableFunds)} tone="sky" />
             </div>
           </div>
         </div>
 
-        {/* <hr className="my-6 border-t-2 border-black" /> */}
-
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <InfoCard
-            icon={<FaUser className="text-blue-500" />}
+            icon={<FaUser />}
             label="Total Students"
             value={totalStudents.toLocaleString()}
             subtext="Across all grade levels"
+            accent="from-sky-500/20 to-sky-600/25"
           />
           <InfoCard
-            icon={<FaUsers className="text-blue-500" />}
+            icon={<FaUsers />}
             label="Total Guardians"
             value={totalGuardians.toLocaleString()}
             subtext="Active parent/guardian accounts"
+            accent="from-indigo-500/20 to-indigo-600/25"
           />
           <InfoCard
             icon={<FaMoneyBillWave />}
             label="Funds Collected"
-            value={`₱ ${Number(totalFundsCollected).toLocaleString()}`}
+            value={formatCurrency(totalFundsCollected)}
             subtext="Year-to-date collections"
-            tintClass="border-yellow-200 hover:border-yellow-300"
-            iconBgClass="bg-yellow-50 text-yellow-500"
-          />
-          <InfoCard
-            icon={<FaFileInvoiceDollar />}
-            label="Expenses"
-            value={`₱ ${Number(totalExpenses).toLocaleString()}`}
-            subtext="Verified disbursements"
-            tintClass="border-red-200 hover:border-red-300"
-            iconBgClass="bg-red-50 text-red-500"
+            accent="from-amber-500/20 to-amber-600/25"
           />
           <InfoCard
             icon={<FaWallet />}
             label="Available Funds"
-            value={`₱ ${Number(availableFunds).toLocaleString()}`}
+            value={formatCurrency(availableFunds)}
             subtext="Ready for allocation"
-            tintClass="border-green-200 hover:border-green-300"
-            iconBgClass="bg-green-50 text-green-500"
+            accent="from-emerald-500/20 to-emerald-600/25"
           />
         </div>
 
-        {/* Content Grid */}
-        <div className="grid grid-cols-1 xl:grid-cols-[3fr,2fr] gap-4 items-stretch">
-          {/* Financial Overview */}
-          <div className="bg-white border border-blue-100/50 rounded-3xl p-6 shadow-sm flex flex-col">
-            <div className="flex items-center justify-between pb-4 border-b border-gray-100">
-              <div>
-                <h3 className="text-lg font-semibold text-slate-800">Financial Overview</h3>
-                <p className="text-sm text-slate-500">Comparing collections, expenses, and remaining funds.</p>
-              </div>
-            </div>
-            <div className="mt-6 w-full h-[340px]">
+        {/* Main Grid */}
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[3fr,2fr]">
+          <SectionCard
+            icon={<FaChartLine className="text-sky-500" />}
+            title="Financial Overview"
+            description="Collections versus disbursements at a glance."
+          >
+            <div className="mt-6 h-[320px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="name" stroke="#475569" />
-                  <YAxis stroke="#475569" />
-                  <Tooltip formatter={(value) => `₱ ${Number(value).toLocaleString()}`} />
-                  <Bar dataKey="amount" radius={[6, 6, 0, 0]}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.5} />
+                  <XAxis dataKey="name" stroke="#475569" tickLine={false} axisLine={false} />
+                  <YAxis stroke="#475569" tickLine={false} axisLine={false} />
+                  <Tooltip
+                    cursor={{ opacity: 0.1 }}
+                    contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 16px 30px rgba(15,23,42,0.12)' }}
+                    formatter={(value) => formatCurrency(value)}
+                  />
+                  <Bar dataKey="amount" radius={[12, 12, 12, 12]}>
                     {chartData.map((entry, index) => (
                       <Cell key={`cell-${entry.name}`} fill={barColors[index] || '#4f46e5'} />
                     ))}
@@ -172,116 +178,207 @@ const Dashboard = ({
                 </BarChart>
               </ResponsiveContainer>
             </div>
-          </div>
+          </SectionCard>
 
-          {/* Activity Column */}
-          <div className="space-y-4 flex flex-col">
-            <div className="bg-white border border-blue-100/50 p-6 rounded-3xl shadow-sm">
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <FaBullhorn className="text-red-500" /> Latest Announcements
-              </h3>
+          <div className="flex flex-col gap-5 xl:h-full">
+            <SectionCard
+              icon={<FaBullhorn className="text-rose-500" />}
+              title="Latest Announcements"
+              description="Keep the community in the loop."
+              className="flex-1"
+            >
               {latestAnnouncements.length === 0 ? (
-                <p className="text-gray-500">No announcements yet.</p>
+                <EmptyState message="No announcements yet." />
               ) : (
-                <ul className="space-y-3">
+                <ul className="mt-4 space-y-3">
                   {latestAnnouncements.map((a) => (
-                    <li key={a.id} className="p-4 bg-white border border-blue-100/40 rounded-2xl transition hover:border-blue-200">
+                    <li
+                      key={a.id}
+                      className="rounded-2xl border border-white/40 bg-white/70 p-4 shadow-sm backdrop-blur transition hover:border-blue-200/80"
+                    >
                       <p className="text-sm font-semibold text-slate-800">{a.title}</p>
                       <p className="text-xs text-slate-500">{formatDate(a.announcement_date)}</p>
                     </li>
                   ))}
                 </ul>
               )}
-            </div>
-
-            <div className="bg-white border border-blue-100/50 p-6 rounded-3xl shadow-sm flex-1">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold">Recent Payments</h3>
-                <span className="text-xs px-3 py-1 rounded-full bg-emerald-100 text-emerald-600 font-semibold">
-                  {totalPayments} entries
-                </span>
-              </div>
-              {payments.length === 0 ? (
-                <p className="text-gray-500">No payments yet.</p>
-              ) : (
-                <>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border border-gray-100 rounded-xl overflow-hidden">
-                      <thead className="bg-gray-50">
-                        <tr className="text-gray-600 uppercase text-xs">
-                          <th className="py-3 px-4">Student</th>
-                          <th>Amount</th>
-                          <th>Date</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {payments.map((p, index) => (
-                          <tr
-                            key={p.id ?? index}
-                            className={`${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-gray-100 transition`}
-                          >
-                            <td className="py-2 px-4">{p.student_name}</td>
-                            <td>₱ {Number(p.amount).toLocaleString()}</td>
-                            <td>{formatDate(p.contributed_date)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="mt-5 flex flex-col items-center gap-3 text-sm text-slate-600">
-                    <span>
-                      {totalPayments === 0
-                        ? 'Showing 0 entries'
-                        : `Showing ${from} to ${to} of ${totalPayments} payments`}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => goToPage(currentPage - 1)}
-                        disabled={!canGoPrevious}
-                        className="w-9 h-9 rounded-lg border border-gray-200 flex items-center justify-center hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                        aria-label="Previous page"
-                      >
-                        ‹
-                      </button>
-                      <span className="px-4 py-1.5 rounded-lg bg-blue-600 text-white font-semibold shadow">
-                        Page {currentPage} of {lastPage}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => goToPage(currentPage + 1)}
-                        disabled={!canGoNext}
-                        className="w-9 h-9 rounded-lg border border-gray-200 flex items-center justify-center hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                        aria-label="Next page"
-                      >
-                        ›
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
+            </SectionCard>
           </div>
         </div>
+
+        <SectionCard
+          icon={<FaClock className="text-emerald-500" />}
+          title="Recent Payments"
+          description="Latest remittances from guardians and students."
+        >
+          {payments.length === 0 ? (
+            <EmptyState message="No payments recorded for now." />
+          ) : (
+            <div className="mt-4 space-y-5">
+              <div className="overflow-x-auto rounded-3xl border border-blue-100/80 bg-white/80 backdrop-blur">
+                <table className="w-full text-left">
+                  <thead className="bg-gradient-to-r from-blue-50 via-indigo-50 to-emerald-50 text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="py-3 pl-6">Student</th>
+                      <th className="py-3">Amount</th>
+                      <th className="py-3 pr-6 text-right">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {payments.map((p, index) => (
+                      <tr
+                        key={p.id ?? index}
+                        className="border-t border-blue-50/70 text-sm hover:bg-blue-50/40"
+                      >
+                        <td className="py-3 pl-6 font-medium text-slate-700">
+                          <div className="flex items-center gap-3">
+                            <Avatar name={p.student_name} />
+                            <span>{p.student_name}</span>
+                          </div>
+                        </td>
+                        <td className="py-3 font-semibold text-slate-800">{formatCurrency(p.amount)}</td>
+                        <td className="py-3 pr-6 text-right text-slate-500">{formatDate(p.contributed_date)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex flex-col items-center gap-3 text-sm text-slate-600 sm:flex-row sm:justify-between">
+                <span>
+                  {totalPayments === 0
+                    ? 'Showing 0 entries'
+                    : `Showing ${from} to ${to} of ${totalPayments} payments`}
+                </span>
+                <div className="flex items-center gap-2">
+                  <PagerButton
+                    disabled={!canGoPrevious}
+                    onClick={() => goToPage(currentPage - 1)}
+                  >
+                    Previous
+                  </PagerButton>
+                  <span className="rounded-full bg-blue-600 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-white shadow">
+                    Page {currentPage} of {lastPage}
+                  </span>
+                  <PagerButton
+                    disabled={!canGoNext}
+                    onClick={() => goToPage(currentPage + 1)}
+                  >
+                    Next
+                  </PagerButton>
+                </div>
+              </div>
+            </div>
+          )}
+        </SectionCard>
       </div>
     </>
   );
 };
 
-// InfoCard Component
-const InfoCard = ({ icon, label, value, subtext, tintClass = 'border-blue-100 hover:border-blue-200', iconBgClass = 'bg-blue-50 text-blue-500' }) => (
-  <div className={`rounded-2xl border bg-white p-4 shadow-sm transition flex items-start gap-3 ${tintClass}`}>
-    <div className={`flex h-11 w-11 items-center justify-center rounded-2xl text-2xl ${iconBgClass}`}>
-      {icon}
-    </div>
-    <div className="space-y-1">
-      <p className="text-xs uppercase tracking-wide text-slate-400">{label}</p>
-      <h2 className="text-2xl font-semibold text-slate-900">{value}</h2>
-      {subtext && <p className="text-xs text-slate-500">{subtext}</p>}
+const InfoCard = ({ icon, label, value, subtext, accent = 'from-blue-500/20 to-blue-600/25' }) => (
+  <div className={`relative overflow-hidden rounded-3xl border border-white/50 bg-white/80 p-5 shadow-lg backdrop-blur-sm transition hover:shadow-xl`}> 
+    <div className={`absolute inset-0 bg-gradient-to-br ${accent} opacity-90`} />
+    <div className="relative flex items-start gap-4">
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/80 text-2xl text-blue-600 shadow-inner">
+        {icon}
+      </div>
+      <div className="space-y-1">
+        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
+        <h2 className="text-2xl font-semibold text-slate-900">{value}</h2>
+        {subtext && <p className="text-xs text-slate-500/90">{subtext}</p>}
+      </div>
     </div>
   </div>
 );
+
+const SectionCard = ({ icon, title, description, children, className = '' }) => (
+  <div className={`relative overflow-hidden rounded-3xl border border-blue-100/80 bg-white/90 p-6 shadow-lg shadow-blue-500/5 backdrop-blur ${className}`}>
+    <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.15),transparent_60%)]" />
+    <div className="flex items-start gap-3">
+      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 text-lg">
+        {icon}
+      </div>
+      <div className="flex-1">
+        <div className="flex flex-col gap-1">
+          <h3 className="text-lg font-semibold text-slate-800">{title}</h3>
+          {description && <p className="text-sm text-slate-500">{description}</p>}
+        </div>
+        {children}
+      </div>
+    </div>
+  </div>
+);
+
+const StatusPill = ({ status }) => {
+  const normalized = (status || '').toLowerCase();
+  const styles = {
+    approved: 'bg-emerald-100 text-emerald-600',
+    completed: 'bg-emerald-100 text-emerald-600',
+    pending: 'bg-amber-100 text-amber-600',
+    rejected: 'bg-rose-100 text-rose-600'
+  };
+
+  const className = styles[normalized] || 'bg-slate-100 text-slate-600';
+
+  return (
+    <span className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${className}`}>
+      {status ?? 'pending'}
+    </span>
+  );
+};
+
+const EmptyState = ({ message }) => (
+  <div className="mt-4 rounded-2xl border border-dashed border-blue-200/70 bg-white/60 p-6 text-center text-sm text-slate-500">
+    {message}
+  </div>
+);
+
+const Avatar = ({ name }) => {
+  const initials = React.useMemo(() => {
+    if (!name) return '—';
+    return name
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((n) => n[0]?.toUpperCase())
+      .join('');
+  }, [name]);
+
+  return (
+    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-500 text-sm font-semibold text-white shadow">
+      {initials || '—'}
+    </span>
+  );
+};
+
+const PagerButton = ({ children, ...props }) => (
+  <button
+    type="button"
+    className="rounded-full border border-blue-200 bg-white px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-blue-600 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+    {...props}
+  >
+    {children}
+  </button>
+);
+
+const HeroBadge = ({ icon, label, value, tone = 'sky' }) => {
+  const toneMap = {
+    emerald: 'from-emerald-400/20 via-emerald-500/20 to-emerald-600/30 text-emerald-100',
+    rose: 'from-rose-400/20 via-rose-500/20 to-rose-600/30 text-rose-100',
+    sky: 'from-sky-400/20 via-sky-500/20 to-sky-600/30 text-sky-100'
+  };
+
+  return (
+    <div className={`flex min-w-[160px] flex-col gap-1 rounded-3xl border border-white/40 bg-gradient-to-tr ${toneMap[tone] ?? toneMap.sky} px-4 py-3 shadow-lg backdrop-blur`}> 
+      <span className="text-xs uppercase tracking-wide text-white/70">{label}</span>
+      <div className="flex items-center gap-2 text-lg font-semibold">
+        <span className="text-white/90">{value}</span>
+        <span className="text-white/70 text-base">{icon}</span>
+      </div>
+    </div>
+  );
+};
 
 Dashboard.layout = (page) => <AdminLayout children={page} />;
 

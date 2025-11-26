@@ -126,7 +126,11 @@ class AuditorController extends Controller
                 $q->whereHas('contribution.schoolYearContributions', function ($q2) use ($schoolYear) {
                     $q2->where('school_year_id', $schoolYear->id);
                 })
-                ->orWhereNotNull('donation_id');
+                ->orWhereNotNull('donation_id')
+                ->orWhere(function ($inner) {
+                    $inner->whereNull('contribution_id')
+                        ->whereNull('donation_id');
+                });
             });
         })
         ->get();

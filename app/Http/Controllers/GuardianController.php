@@ -707,12 +707,14 @@ public function contributions()
         ];
     }
 
-    return $this->renderWithNotifications('Guardian/Contributions', [
-        'guardian' => $guardian,
-        'students' => $students,
-        'payments' => $payments,
-        'schoolYearContributions' => $schoolYearContributions,
-    ]);
+   return $this->renderWithNotifications('Guardian/Contributions', [
+    'guardian' => $guardian,
+    'students' => $students,
+    'payments' => $payments,
+    'schoolYearContributions' => $schoolYearContributions,
+    'schoolYearCards' => $schoolYearCards,
+    'schoolYear' => $schoolYear,
+]);
 }
 
 public function reports(Request $request)
@@ -937,69 +939,85 @@ public function reports(Request $request)
 private function resolveGuardianReportRange(Request $request, string $timezone): array
 {
     $now = Carbon::now($timezone);
-    $rawType = strtolower(str_replace(['-', ' '], '_', $request->input('filter_type', 'month')));
-    $type = in_array($rawType, ['month', 'year', 'date_range'], true) ? $rawType : 'month';
 
-    $start = $now->copy()->startOfMonth();
-    $end = $now->copy()->endOfMonth();
-    $resolvedType = 'month';
-    $resolvedMonth = $start->format('Y-m');
-    $resolvedYear = $start->format('Y');
+    $defaultStart = $now->copy()->startOfMonth();
+    $defaultEnd = $now->copy()->endOfMonth();
+    $defaultResolvedType = 'month';
+    $defaultResolvedMonth = $defaultStart->format('Y-m');
+    $defaultResolvedYear = (string) $defaultStart->year;
 
-    if ($type === 'year') {
-        $year = (int) ($request->input('filter_year') ?: $now->year);
-        if ($year < 2000 || $year > 2100) {
-            $year = (int) $now->year;
+    $start = $defaultStart->copy();
+    $end = $defaultEnd->copy();
+    $resolvedType = $defaultResolvedType;
+    $resolvedMonth = $defaultResolvedMonth;
+    $resolvedYear = $defaultResolvedYear;
+
+    try {
+        $rawType = strtolower(str_replace(['-', ' '], '_', $request->input('filter_type', 'month')));
+        $type = in_array($rawType, ['month', 'year', 'date_range'], true) ? $rawType : 'month';
+
+        switch ($type) {
+            case 'year':
+                $year = (int) ($request->input('filter_year') ?: $now->year);
+                if ($year < 2000 || $year > 2100) {
+                    $year = (int) $now->year;
+                }
+                $start = Carbon::create($year, 1, 1, 0, 0, 0, $timezone)->startOfYear();
+                $end = $start->copy()->endOfYear();
+                $resolvedType = 'year';
+                $resolvedYear = (string) $year;
+                $resolvedMonth = $start->format('Y-m');
+                break;
+
+            case 'date_range':
+                $startInput = $request->input('filter_start');
+                $endInput = $request->input('filter_end');
+
+                if ($startInput) {
+                    $start = Carbon::parse($startInput, $timezone)->startOfDay();
+                }
+                if ($endInput) {
+                    $end = Carbon::parse($endInput, $timezone)->endOfDay();
+                } elseif ($startInput) {
+                    $end = $start->copy()->endOfDay();
+                }
+
+                if ($start->gt($end)) {
+                    $temp = $start->copy();
+                    $start = $end->copy();
+                    $end = $temp;
+                }
+
+                $resolvedType = 'dateRange';
+                $resolvedMonth = $start->format('Y-m');
+                $resolvedYear = (string) $start->year;
+                break;
+
+            case 'month':
+            default:
+                $monthInput = $request->input('filter_month');
+                if ($monthInput && preg_match('/^\d{4}-\d{2}$/', $monthInput)) {
+                    [$year, $month] = array_map('intval', explode('-', $monthInput));
+                    $start = Carbon::create($year, max(1, min(12, $month)), 1, 0, 0, 0, $timezone)->startOfMonth();
+                    $end = $start->copy()->endOfMonth();
+                    $resolvedMonth = $start->format('Y-m');
+                    $resolvedYear = (string) $start->year;
+                }
+                break;
         }
 
-        $start = Carbon::create($year, 1, 1, 0, 0, 0, $timezone)->startOfYear();
-        $end = $start->copy()->endOfYear();
-        $resolvedType = 'year';
-        $resolvedYear = (string) $year;
-        $resolvedMonth = sprintf('%04d-01', $year);
-    } elseif ($type === 'date_range') {
-        $startInput = $request->input('filter_start');
-        $endInput = $request->input('filter_end');
-
-        if ($startInput || $endInput) {
-            try {
-                $start = $startInput
-                    ? Carbon::parse($startInput, $timezone)->startOfDay()
-                    : Carbon::parse($endInput, $timezone)->copy()->startOfDay();
-            } catch (\Exception $e) {
-                $start = $now->copy()->startOfMonth();
-            }
-
-            try {
-                $end = $endInput
-                    ? Carbon::parse($endInput, $timezone)->endOfDay()
-                    : $start->copy()->endOfDay();
-            } catch (\Exception $e) {
-                $end = $start->copy()->endOfMonth();
-            }
-
-            if ($start->greaterThan($end)) {
-                [$start, $end] = [$end->copy()->startOfDay(), $start->copy()->endOfDay()];
-            }
-
-            $resolvedType = 'dateRange';
-            $resolvedMonth = $start->format('Y-m');
-            $resolvedYear = $start->format('Y');
-        }
-    } else {
-        $monthInput = $request->input('filter_month');
-        if ($monthInput && preg_match('/^\d{4}-\d{2}$/', $monthInput)) {
-            [$year, $month] = array_map('intval', explode('-', $monthInput));
-            $reference = Carbon::create($year, max(1, min(12, $month)), 1, 0, 0, 0, $timezone);
-        } else {
-            $reference = $now->copy();
+        if (!$start || !$end) {
+            throw new \RuntimeException('Invalid date range');
         }
 
-        $start = $reference->copy()->startOfMonth();
-        $end = $reference->copy()->endOfMonth();
-        $resolvedType = 'month';
         $resolvedMonth = $start->format('Y-m');
         $resolvedYear = $start->format('Y');
+    } catch (\Throwable $exception) {
+        $start = $defaultStart->copy();
+        $end = $defaultEnd->copy();
+        $resolvedType = $defaultResolvedType;
+        $resolvedMonth = $defaultResolvedMonth;
+        $resolvedYear = $defaultResolvedYear;
     }
 
     return [
